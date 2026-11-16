@@ -1,23 +1,36 @@
+#define _WIN32_WINNT 0x0400
+
 #include <windows.h>
 #include "logging.h"
 #include "winmm_hook.h"
 #include "hook_helper.h"
-#include "crypto.h"
+#include "nokia_crypto.h"
+#include "blackberry_crypto.h"
 
 enum ReadRequestType
 {
 	DecodeMsid,
 	EncodeFaid,
 	GetCredits,
+	GetMeps,
+	GetBBXGoldCounter,
+	CalcMep,
+	GetLumiaActivation,
 	Unknown
 };
 
 static const BYTE g_MsigDecodeTemplate[] = {0x1C,0x00,0x00,0x12,0x00,0x40,0x0E,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x90,0x00,0x00};
 static const BYTE g_FaidEncodeTemplate[] = {0x1C,0x00,0x00,0x12,0x00,0x00,0x0E,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x90,0x00,0x00};
 static const BYTE g_CreditsResponseTemplate[] = {0x1C,0x00,0x00,0x08,0x00,0x00,0x04,0x10,0x20,0x90,0x00,0x00};
+static const BYTE g_BBXGoldCounterResponse[] = {0x1C,0x00,0x00,0x04,0x00,0x00,0x00,0x64};
+static const BYTE g_LumiaActivationResponse[] = {0x1C,0x00,0x00,0x10,0x2F,0x83,0xA7,0xF0,0x54,0x11,0x7F,0xC2,0xBB,0x78,0x90,0x9E,0xD9,0xFC,0xCD,0xBB};
 
 static ReadRequestType g_ReadRequestType = Unknown;
+static BOOL g_EnableCounterEmulation = FALSE;
 static BYTE g_LastMsid[13];
+
+static BYTE g_LastBBImei[16];
+static char g_LastMepName[14];
 
 typedef int(__cdecl* UsbBulk_t)(void*,int,BYTE*,int,int);
 UsbBulk_t UsbBulkWriteOrigFunc = NULL;
@@ -37,15 +50,36 @@ int __cdecl UsbBulkWrite_Hook(void* dev, int ep, BYTE* bytes, int size, int time
             return size;
         }
     }
-
     if (size == 30 && bytes[0] == 0x1C && bytes[12] == 0x41)
     {
         g_ReadRequestType = EncodeFaid;
         return size;
     }
+    if (size == 5 && bytes[0] == 0x1C && *(WORD*)(bytes + 3) == 0xC201)
+    {
+        g_ReadRequestType = GetMeps;
+        return size;
+    }
+    if (size == 6 && bytes[0] == 0x1C && *(DWORD*)(bytes + 2) == 0x10C30200 && g_EnableCounterEmulation)
+    {
+        g_EnableCounterEmulation = FALSE;
+        g_ReadRequestType = GetBBXGoldCounter;
+        return size;
+    }
+    if (size == 8 && bytes[0] == 0x1C && *(DWORD*)(bytes + 4) == 0x415352CB)
+    {
+        g_ReadRequestType = GetLumiaActivation;
+        return size;
+    }
+    if (size == 35 && bytes[0] == 0x1C && *(WORD*)(bytes + 3) == 0xBB1F)
+    {
+        g_ReadRequestType = CalcMep;
+        memcpy(g_LastBBImei, bytes + 5, sizeof(g_LastBBImei));
+        memcpy(g_LastMepName, bytes + 21, sizeof(g_LastMepName));
+        return size;
+    }
 
     int result = UsbBulkWriteOrigFunc(dev, ep, bytes, size, timeout);
-
     if (result >= 0 && size == 18 && bytes[0] == 0x1C && bytes[12] == 0x14)
     {
         g_ReadRequestType = GetCredits;
@@ -83,6 +117,50 @@ int __cdecl UsbBulkRead_Hook(void* dev, int ep, BYTE* bytes, int size, int timeo
 
         LogBufferToFile("UsbBulkRead_Hook", bytes, sizeof(g_MsigDecodeTemplate));
         return sizeof(g_MsigDecodeTemplate);
+    }
+    if (g_ReadRequestType == GetMeps)
+    {
+        bytes[0] = 0x1C;
+        bytes[1] = 0x00;
+        int size = FillMepsBuffer(bytes + 4);
+        bytes[2] = (BYTE)(size >> 8);
+        bytes[3] = (BYTE)size;
+        g_EnableCounterEmulation = TRUE;
+        LogBufferToFile("UsbBulkRead_Hook", bytes, size);
+        return size;
+    }
+    if (g_ReadRequestType == GetBBXGoldCounter)
+    {
+        memcpy(bytes, g_BBXGoldCounterResponse, sizeof(g_BBXGoldCounterResponse));
+        LogBufferToFile("UsbBulkRead_Hook", bytes, sizeof(g_BBXGoldCounterResponse));
+        return sizeof(g_BBXGoldCounterResponse);
+    }
+    if (g_ReadRequestType == GetLumiaActivation)
+    {
+        memcpy(bytes, g_LumiaActivationResponse, sizeof(g_LumiaActivationResponse));
+        LogBufferToFile("UsbBulkRead_Hook", bytes, sizeof(g_LumiaActivationResponse));
+        return sizeof(g_LumiaActivationResponse);
+    }
+    if (g_ReadRequestType == CalcMep)
+    {
+        bytes[0] = 0x1C; bytes[1] = 0x00; bytes[2] = 0x00; bytes[3] = 0x10;
+        BYTE code[20];
+        ZeroMemory(code, sizeof(code));
+        g_LastBBImei[15]--;
+        if (!CalculateMep(g_LastMepName, g_LastBBImei, code))
+        {
+            return -1;
+        }
+
+        int offset = 0;
+        for (int i = 0; i < 16; i++)
+        {
+            offset += sprintf((char*)(bytes + 4 + offset), "%d", code[i]);
+        }
+
+        g_EnableCounterEmulation = TRUE;
+        LogBufferToFile("UsbBulkRead_Hook", bytes, 20);
+        return 20;
     }
 
     int result = UsbBulkReadOrigFunc(dev, ep, bytes, size, timeout);
