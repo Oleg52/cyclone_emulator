@@ -1,6 +1,6 @@
 # Cyclone Smartcard Emulator
 
-This project emulates MSID-FAID encryption logic for DCT4 phones for Classic Cyclone Box.
+This project emulates MSID-FAID encryption logic for DCT4 phones and Blackberry MEP codes calculator for Classic Cyclone Box.
 
 Classic Cyclone Box runs encryption code on smartcard gated by credits, when credits run out it cannot be used anymore(server is dead, cannot refill).
 
