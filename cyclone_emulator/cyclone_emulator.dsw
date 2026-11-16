@@ -3,7 +3,7 @@ Microsoft Developer Studio Workspace File, Format Version 6.00
 
 ###############################################################################
 
-Project: "cyclone_emualtor"=".\cyclone_emualtor.dsp" - Package Owner=<4>
+Project: "cyclone_emulator"=".\cyclone_emulator.dsp" - Package Owner=<4>
 
 Package=<5>
 {{{

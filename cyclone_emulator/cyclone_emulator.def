@@ -1,4 +1,4 @@
-LIBRARY cyclone_emualtor
+LIBRARY cyclone_emulator
 EXPORTS
 	CloseDriver=fCloseDriver @1
 	DefDriverProc=fDefDriverProc @2
